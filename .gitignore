@@ -1,0 +1,53 @@
+# Qt / qmake build outputs
+build/
+build-*/
+*-Debug/
+*-Release/
+release/
+debug/
+
+# Generated files
+Makefile
+ui_*.h
+moc_*.cpp
+moc_*.o
+qrc_*.cpp
+*.o
+*.obj
+
+# Executables / packages
+*.AppImage
+*.tar.gz
+*.run
+ros2_pub_gui
+
+# Qt Creator
+*.pro.user
+*.pro.user.*
+*.autosave
+*.qmake.stash
+
+# Python
+__pycache__/
+*.pyc
+
+# Logs / temp
+*.log
+*.tmp
+*.swp
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Backup / duplicate
+*（复件）*
+*_backup.*
+*.bak
+
+# Secrets / local config
+.env
+*.pem
+*.key
+*.secret

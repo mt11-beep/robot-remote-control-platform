@@ -1,0 +1,53 @@
+cd ~/rpp_tools
+一、自动准备分步
+#启动机器人:
+ros2 launch robot_bringup robot_driver.launch.py
+#启动机械臂:
+ros2 launch robot_bringup arm.launch.py
+#启动远程相机:
+ssh -t rpp@192.168.11.10 "source ~/.rpprc && ros2 launch realsense2_camera rs_align_depth_launch.py"
+#启动识别程序
+ssh -t rpp@192.168.11.10 "source ~/.rpprc && ros2 launch yolo_bringup yolov11.launch.py"
+#测试抓取demo:
+ros2 launch bt_task_manager_ros2 grasp_node.launch.py
+
+#循环抓取：
+ros2 topic pub /grasp_node/cmd std_msgs/msg/String "data: 'loop'" -1
+#停止任务:
+#机械臂复位:
+
+#抓取demo/抓取准备:
+ros2 launch bt_task_manager_ros2 controller_node.launch.py
+
+
+#开始抓取:
+ros2 topic pub /controller_node/dashboard/start std_msgs/msg/Empty {} -1
+#停止抓取:
+ros2 topic pub /controller_node/dashboard/cancel std_msgs/msg/Empty {} -1
+
+
+#开始导航:
+ros2 launch navigation_2d fast_lio_navigation.launch.py
+
+自动准备：
+gnome-terminal --working-directory="$HOME/rpp_tools" -- bash -c "ros2 launch robot_bringup robot_driver.launch.py; exec bash" && \
+gnome-terminal --working-directory="$HOME/rpp_tools" -- bash -c "ros2 launch robot_bringup arm.launch.py; exec bash" && \
+gnome-terminal --working-directory="$HOME/rpp_tools" -- bash -c "ssh -t rpp@192.168.11.10 'source ~/.rpprc && ros2 launch realsense2_camera rs_align_depth_launch.py'; exec bash" && \
+gnome-terminal --working-directory="$HOME/rpp_tools" -- bash -c "ssh -t rpp@192.168.11.10 'source ~/.rpprc && ros2 launch yolo_bringup yolov11.launch.py'; exec bash" && \
+gnome-terminal --working-directory="$HOME/rpp_tools" -- bash -c "ros2 launch bt_task_manager_ros2 grasp_node.launch.py; exec bash"&& \
+gnome-terminal --working-directory="$HOME/rpp_tools" -- bash -c "ros2 launch navigation_2d fast_lio_navigation.launch.py; exec bash"
+
+升降：
+gnome-terminal --title="工控机控制台" -- bash -c "sshpass -p 'shihe321' ssh -t -p 2347 rpp@localhost 'bash -ic \"gnome-terminal -- bash -c \\\"ros2 launch motor_lift_ros motor_lift_ros.launch.py & sleep 2; ros2 topic pub /motor_lift/set_position std_msgs/msg/Float32 \\\\\\\"data: 0.1\\\\\\\" --once; exec bash\\\"\"'"
+
+指令自动准备：
+sshpass -p 'shihe321' ssh -t -p 2347 rpp@localhost 'bash -ic "gnome-terminal --working-directory="$HOME/rpp_tools" -- bash -c "ros2 launch robot_bringup robot_driver.launch.py; exec bash" && \
+gnome-terminal --working-directory="$HOME/rpp_tools" -- bash -c "ros2 launch robot_bringup arm.launch.py; exec bash" && \
+gnome-terminal --working-directory="$HOME/rpp_tools" -- bash -c "ssh -t rpp@192.168.11.10 'source ~/.rpprc && ros2 launch realsense2_camera rs_align_depth_launch.py'; exec bash" && \
+gnome-terminal --working-directory="$HOME/rpp_tools" -- bash -c "ssh -t rpp@192.168.11.10 'source ~/.rpprc && ros2 launch yolo_bringup yolov11.launch.py'; exec bash" && \
+gnome-terminal --working-directory="$HOME/rpp_tools" -- bash -c "ros2 launch bt_task_manager_ros2 grasp_node.launch.py; exec bash"&& \
+gnome-terminal --working-directory="$HOME/rpp_tools" -- bash -c "ros2 launch navigation_2d fast_lio_navigation.launch.py; exec bash""'
+
+
+
+

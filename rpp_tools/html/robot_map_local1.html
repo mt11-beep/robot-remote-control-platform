@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Robot Navigation Visualization</title>
+<script src="roslib.min.js"></script>
+
+<style>
+  body {
+    font-family: "Segoe UI", Arial, sans-serif;
+    background: #eef2f6;
+  }
+  h2 {
+    margin-bottom: 6px;
+  }
+  #status {
+    margin-bottom: 10px;
+    font-weight: bold;
+  }
+  canvas {
+    background: #ffffff;
+    border-radius: 10px;
+    box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+  }
+</style>
+</head>
+
+<body>
+<h2>Nav2 Robot Map Visualization</h2>
+<div id="status">Connecting...</div>
+<canvas id="mapCanvas"></canvas>
+
+<script>
+/* ================= ROS ================= */
+const ros = new ROSLIB.Ros({
+  url: "ws://127.0.0.1:9090"
+});
+
+ros.on("connection", () => status.innerHTML = "✅ Connected to rosbridge");
+ros.on("error", e => status.innerHTML = "❌ Error: " + e);
+ros.on("close", () => status.innerHTML = "🔌 Connection closed");
+
+/* ================= Canvas ================= */
+const canvas = document.getElementById("mapCanvas");
+const ctx = canvas.getContext("2d");
+
+/* ================= Data ================= */
+let mapData = null;
+let globalPath = null;
+let robotPose = { x: 0, y: 0, theta: 0 };
+const scale = 2;
+
+/* ================= /map (必须带 QoS) ================= */
+new ROSLIB.Topic({
+  ros: ros,
+  name: "/map",
+  messageType: "nav_msgs/OccupancyGrid",
+  qos: {
+    durability: "transient_local",
+    reliability: "reliable"
+  }
+}).subscribe(msg => {
+  mapData = msg;
+  canvas.width  = msg.info.width  * scale;
+  canvas.height = msg.info.height * scale;
+  draw();
+});
+
+/* ================= /amcl_pose ================= */
+new ROSLIB.Topic({
+  ros: ros,
+  name: "/amcl_pose",
+  messageType: "geometry_msgs/PoseWithCovarianceStamped"
+}).subscribe(msg => {
+  robotPose.x = msg.pose.pose.position.x;
+  robotPose.y = msg.pose.pose.position.y;
+
+  const q = msg.pose.pose.orientation;
+  robotPose.theta = Math.atan2(
+    2 * (q.w*q.z + q.x*q.y),
+    1 - 2 * (q.y*q.y + q.z*q.z)
+  );
+  draw();
+});
+
+/* ================= /plan ================= */
+new ROSLIB.Topic({
+  ros: ros,
+  name: "/plan",
+  messageType: "nav_msgs/Path"
+}).subscribe(msg => {
+  globalPath = msg;
+  draw();
+});
+
+/* ================= Draw ================= */
+function draw() {
+  if (!mapData) return;
+
+  const w = mapData.info.width;
+  const h = mapData.info.height;
+  const res = mapData.info.resolution;
+  const origin = mapData.info.origin.position;
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  /* ===== 地图（好看配色） ===== */
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = x + (h - y - 1) * w;
+      const v = mapData.data[i];
+
+      if (v === -1) ctx.fillStyle = "#bfc7ce";      // 未知
+      else if (v > 50) ctx.fillStyle = "#263238";  // 障碍
+      else ctx.fillStyle = "#e9f0f4";               // 空闲
+
+      ctx.fillRect(x * scale, y * scale, scale, scale);
+    }
+  }
+
+  /* ===== 规划路径（/plan） ===== */
+  if (globalPath && globalPath.poses.length > 1) {
+    ctx.strokeStyle = "#00c8ff";   // 鲜艳蓝
+    ctx.lineWidth = 4;
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.beginPath();
+
+    globalPath.poses.forEach((p, i) => {
+      let px = (p.pose.position.x - origin.x) / res;
+      let py = h - (p.pose.position.y - origin.y) / res;
+      let cx = px * scale;
+      let cy = py * scale;
+      i === 0 ? ctx.moveTo(cx, cy) : ctx.lineTo(cx, cy);
+    });
+    ctx.stroke();
+  }
+
+  /* ===== 机器人 ===== */
+  let rx = (robotPose.x - origin.x) / res;
+  let ry = h - (robotPose.y - origin.y) / res;
+  rx *= scale;
+  ry *= scale;
+
+  // 外环
+  ctx.fillStyle = "rgba(255,59,48,0.35)";
+  ctx.beginPath();
+  ctx.arc(rx, ry, 10, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 内核
+  ctx.fillStyle = "#ff3b30";
+  ctx.beginPath();
+  ctx.arc(rx, ry, 5, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 朝向
+  ctx.strokeStyle = "#ff9500";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(rx, ry);
+  ctx.lineTo(
+    rx + 20 * Math.cos(-robotPose.theta),
+    ry + 20 * Math.sin(-robotPose.theta)
+  );
+  ctx.stroke();
+}
+</script>
+</body>
+</html>
