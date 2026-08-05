@@ -72,8 +72,8 @@ private:
     bool mapStarted = false;//new
     bool videoStarted = false;//new
 
-    QString robotUser = "rpp";
-    QString robotPassword = "shihe321";   // 改成你的机器人密码//new
+    QString robotUser = "<ROBOT_USER>";
+    QString robotPassword = "<ROBOT_PASSWORD>";   // 改成你的机器人密码//new
     int reverseSshPort = 2345;            // 服务器本地回连机器人的端口//new
     int controlSshPort = 2345;   // 旧控制链路端口（手动/自动控制命令用）//new
 
