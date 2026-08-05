@@ -1,4 +1,4 @@
-# ros2_pub_gui
+# Robot Remote Control Platform
 
 一个面向 Linux 服务器部署的 Qt 机器人控制界面，用于通过 SSH 远程触发机器人端 ROS2 脚本，并在 GUI 内嵌显示地图与双路视频页面。
 
@@ -12,7 +12,7 @@
 - 机器人端提供 ROS2 控制脚本与地图/视频服务脚本（`rpp_tools/*.sh`、`map_bridge.py`、`video_mjpeg_server.py`、`rpp_tools/html/*`）。
 - GUI 点击“连接”后，会尝试通过 `localhost:<端口>` 建立 SSH 与本地端口转发（8080/8081/9090），这意味着现场部署通常依赖“机器人 -> 服务器”的反向 SSH 链路。
 
-> 注意：仓库中 `mainwindow.h` 写死了示例账号/密码与端口（如 `robotUser`、`robotPassword`、`reverseSshPort`），实际部署请改为你的环境参数（建议配合密钥登录）。
+> 注意：机器人连接参数采用占位符管理，实际部署时需根据机器人网络环境进行配置。
 
 ---
 
