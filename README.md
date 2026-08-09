@@ -18,12 +18,43 @@
 
 ## 项目界面
 
-<img width="692" height="456" alt="image" src="https://github.com/user-attachments/assets/7a8556f4-54e9-49ab-ab98-5d372e87a48e" />
+![System Architecture](docs/gui0.png) ![System Architecture](docs/gui1.png)
 
 
 ## 项目框架
 
-<img width="631" height="741" alt="图6 drawio (1)" src="https://github.com/user-attachments/assets/7d9f30de-160a-43f7-bad9-b41c9ebef746" />
++--------------------+
+| Qt GUI             |
+| ros2_pub_gui       |
++---------+----------+
+          |
+          | QProcess
+          v
++--------------------+
+| sshpass / ssh      |
+| localhost:2345     |
++---------+----------+
+          |
+          v
++--------------------+
+| Robot rpp_tools    |
++---------+----------+
+          |
+          +-------------------------+
+          |                         |
+          v                         v
++--------------------+      +--------------------+
+| ROS2 控制命令       |      | Web 服务            |
+| /cmd_vel           |      | 8080 static html    |
+| /navigate_to_pose  |      | 8081 Flask image    |
+| /grasp_node/cmd    |      | 9090 rosbridge      |
+| /motor_lift/...    |      +---------+----------+
++--------------------+                |
+                                      v
+                             +--------------------+
+                             | QWebEngineView     |
+                             | mapView/videoView  |
+                             +--------------------+
 
 ## 项目目录结构
 
