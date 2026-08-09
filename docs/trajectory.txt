@@ -1,0 +1,953 @@
+ROS2 Pub GUI 项目结构与运行链路分析
+====================================
+
+一、项目定位
+------------
+
+本项目是一个运行在服务器/上位机 Linux 环境上的 Qt 图形界面，用于远程控制和监控机器人。
+
+核心能力：
+
+1. 通过 SSH/sshpass 连接机器人侧用户 `rpp@localhost`。
+2. 在机器人侧执行 `~/rpp_tools` 目录下的 ROS2 辅助脚本。
+3. 提供手动运动控制：前进、后退、左转、右转、停止、升降。
+4. 提供自动控制：自动准备、单点导航、抓取任务。
+5. 通过 Qt WebEngine 嵌入地图页面和视频页面。
+6. 通过本地 SSH 端口转发把机器人侧 8080、8081、9090 暴露给 Qt GUI。
+7. 使用日志窗口显示命令输出和状态变化。
+
+
+二、顶层目录结构图
+------------------
+
+.
+|-- trajectory.txt
+|   `-- 本文件：项目分析和结构图
+|
+|-- ros2_pub_gui/
+|   |-- main.cpp
+|   |   `-- Qt 程序入口：创建 QApplication、加载翻译、显示 MainWindow
+|   |
+|   |-- mainwindow.h
+|   |   `-- MainWindow 类声明：
+|   |       |-- UI 指针
+|   |       |-- QProcess 命令进程
+|   |       |-- SSH 隧道进程
+|   |       |-- QWebEngineView 地图/视频视图
+|   |       |-- 控制模式状态机
+|   |       |-- 按钮槽函数
+|   |       `-- SSH 命令构造、端口探测、布局伸缩等辅助函数
+|   |
+|   |-- mainwindow.cpp
+|   |   `-- 主业务实现：
+|   |       |-- 窗口初始化、主题 QSS、顶部按钮布局
+|   |       |-- 手动控制按钮 pressed/released 逻辑
+|   |       |-- 自动控制命令执行逻辑
+|   |       |-- 急停逻辑
+|   |       |-- SSH 隧道建立/断开
+|   |       |-- 地图和视频 WebEngine 页面加载
+|   |       `-- QSplitter 可伸缩布局
+|   |
+|   |-- mainwindow.ui
+|   |   `-- Qt Designer UI：
+|   |       |-- topBar：启动地图、启动视频、连接、急停
+|   |       |-- leftPanel：mapContainer、videoContainer
+|   |       |-- rightPanel：manualGroup、autoGroup、logView
+|   |       |-- manualGroup：前/后/左/右/停止/升降
+|   |       `-- autoGroup：自动准备、单点导航、X/Y/W 输入、抓取
+|   |
+|   |-- ros2_pub_gui.pro
+|   |   `-- qmake 工程文件：
+|   |       |-- QT += core gui widgets webenginewidgets
+|   |       |-- CONFIG += c++11
+|   |       |-- SOURCES/HEADERS/FORMS
+|   |       `-- 翻译文件嵌入配置
+|   |
+|   |-- ros2_pub_gui_zh_CN.ts
+|   |   `-- 中文翻译源文件
+|   |
+|   |-- build-release/
+|   |   `-- 发布构建产物：
+|   |       |-- 可执行程序 ros2_pub_gui
+|   |       |-- AppImage
+|   |       |-- Qt WebEngine 运行资源
+|   |       |-- Qt 插件和动态库
+|   |       `-- translations/resources/doc 等部署文件
+|   |
+|   |-- Makefile、*.o、moc_*.cpp、ui_mainwindow.h、qrc_*.cpp
+|   |   `-- qmake/moc/uic/rcc 自动生成或编译产物
+|   |
+|   `-- mainwindow（复件）.h / mainwindow（复件）.cpp
+|       `-- 源码备份副本，非当前 qmake 工程入口
+|
+|-- ros2_pub_gui_github/
+|   |-- README.md
+|   |   `-- 项目说明，描述 server + robot 部署结构
+|   |
+|   |-- main.cpp / mainwindow.cpp / mainwindow.h / mainwindow.ui / ros2_pub_gui.pro
+|   |   `-- 更接近发布仓库形态的一份源码
+|   |
+|   `-- rpp_tools/
+|       |-- forward.sh
+|       |-- backward.sh
+|       |-- turn_left.sh
+|       |-- turn_right.sh
+|       |-- stop.sh
+|       |-- up_down.sh
+|       |-- start_robot_driver.sh
+|       |-- start_all.sh
+|       |-- navigate_to_pose.sh
+|       |-- loop_scraping.sh
+|       |-- start_map_service.sh
+|       |-- stop_map_runtime.sh
+|       |-- stop_map_service.sh
+|       |-- start_video_service.sh
+|       |-- stop_video_service.sh
+|       |-- map_bridge.py
+|       |-- video_mjpeg_server.py
+|       |-- video_mjpeg_server0.py
+|       |-- zhiling.txt
+|       `-- html/
+|           |-- robot_map_local.html
+|           |-- robot_map_local1.html
+|           |-- video.html
+|           |-- video1.html
+|           |-- test_connect.html
+|           |-- roslib.min.js
+|           |-- map.png
+|           `-- map_meta.json
+|
+`-- build-ros2_pub_gui-unknown-Debug/
+    `-- Qt Creator Debug 构建目录：
+        |-- ros2_pub_gui
+        |-- Makefile
+        |-- *.o
+        |-- moc_*.cpp
+        |-- ui_mainwindow.h
+        `-- qrc_*.cpp
+
+
+三、总体架构图
+--------------
+
++-----------------------------+
+|  用户 / 操作员               |
+|  点击 Qt GUI 按钮            |
++--------------+--------------+
+               |
+               v
++-----------------------------+
+|  Server / 上位机             |
+|  ros2_pub_gui Qt 程序         |
+|                             |
+|  MainWindow                 |
+|  |-- UI 控件                 |
+|  |-- 控制模式状态机          |
+|  |-- QProcess 命令执行       |
+|  |-- SSH 隧道 QProcess       |
+|  |-- QWebEngineView 地图     |
+|  `-- QWebEngineView 视频     |
++--------------+--------------+
+               |
+               | sshpass + ssh -p 2345 rpp@localhost
+               | 本地端口转发：
+               | -L 8080:127.0.0.1:8080
+               | -L 8081:127.0.0.1:8081
+               | -L 9090:127.0.0.1:9090
+               v
++-----------------------------+
+|  Robot / 机器人侧            |
+|  ~/rpp_tools                 |
+|                             |
+|  Shell 脚本启动 ROS2 节点     |
+|  Python 服务桥接地图/视频     |
+|  HTML 页面通过 Web/ROSBridge |
+|  展示地图和视频              |
++--------------+--------------+
+               |
+               v
++-----------------------------+
+|  ROS2 系统                   |
+|                             |
+|  /cmd_vel                    |
+|  /motor_lift/set_position    |
+|  /navigate_to_pose action    |
+|  /grasp_node/cmd             |
+|  /map -> /web_map            |
+|  /camera/... compressed      |
+|  /yolo/dbg_image             |
++-----------------------------+
+
+
+四、Qt GUI 内部结构图
+--------------------
+
+QApplication
+|
+`-- MainWindow
+    |
+    |-- 初始化
+    |   |-- ui->setupUi(this)
+    |   |-- setWindowTitle("远程桌面控制系统")
+    |   |-- 设置全局 QSS 深色主题
+    |   |-- 重建 topBar 横向布局
+    |   |-- setupResizableLayout()
+    |   `-- updateControlButtons()
+    |
+    |-- UI 区域
+    |   |
+    |   |-- topBar
+    |   |   |-- showMapButton       启动/停止地图
+    |   |   |-- showVideoButton     启动/停止视频
+    |   |   |-- publishButton       连接/断开
+    |   |   `-- emergencyStopButton 急停
+    |   |
+    |   |-- leftPanel
+    |   |   |-- mapContainer
+    |   |   |   `-- mapView: QWebEngineView
+    |   |   |       `-- http://127.0.0.1:8080/robot_map_local.html
+    |   |   |
+    |   |   `-- videoContainer
+    |   |       `-- videoView: QWebEngineView
+    |   |           `-- http://127.0.0.1:8080/video.html
+    |   |
+    |   `-- rightPanel
+    |       |-- manualGroup
+    |       |   |-- manualControlButton
+    |       |   |-- forwardButton
+    |       |   |-- backwardButton
+    |       |   |-- leftButton
+    |       |   |-- rightButton
+    |       |   |-- stopButton
+    |       |   |-- liftParamEdit
+    |       |   `-- liftButton
+    |       |
+    |       |-- autoGroup
+    |       |   |-- autoControlButton
+    |       |   |-- autoPrepareButton
+    |       |   |-- singlePointNavButton
+    |       |   |-- xInput
+    |       |   |-- yInput
+    |       |   |-- wInput
+    |       |   `-- grabButton
+    |       |
+    |       `-- logView
+    |
+    |-- 进程对象
+    |   |-- process: QProcess
+    |   |   `-- 手动模式唯一命令进程；新手动命令会 kill 上一个进程
+    |   |
+    |   |-- autoProcesses: QList<QProcess*>
+    |   |   `-- 自动模式允许多个命令并发执行；finished 后 deleteLater
+    |   |
+    |   `-- tunnelProcess: QProcess
+    |       `-- 维护 SSH 本地端口转发
+    |
+    |-- 状态字段
+    |   |-- currentMode: Manual / Auto / EmergencyStop
+    |   |-- isAutoPrepared
+    |   |-- tunnelConnected
+    |   |-- mapStarted
+    |   `-- videoStarted
+    |
+    |-- 网络/SSH 配置
+    |   |-- robotUser = "rpp"
+    |   |-- robotPassword = "shihe321"
+    |   |-- reverseSshPort = 2345
+    |   `-- controlSshPort = 2345
+    |
+    `-- 可伸缩布局
+        |-- outerSplitter: topBar / contentArea
+        |-- contentSplitter: leftPanel / rightPanel
+        `-- leftSplitter: mapContainer / videoContainer
+
+
+五、控制模式状态机
+------------------
+
+currentMode 默认值：EmergencyStop
+
+状态图：
+
+             +----------------+
+             | EmergencyStop  |
+             | 急停/默认状态   |
+             +--------+-------+
+                      |
+          +-----------+-----------+
+          |                       |
+          v                       v
+   +--------------+         +--------------+
+   | Manual       |         | Auto         |
+   | 手动控制      |         | 自动控制      |
+   +------+-------+         +------+-------+
+          |                        |
+          | 点击急停                | 点击急停
+          +-----------+------------+
+                      v
+             +----------------+
+             | EmergencyStop  |
+             +----------------+
+
+按钮可用性：
+
+1. EmergencyStop 状态：
+   - 手动控制按钮可点。
+   - 自动控制按钮可点。
+   - 急停按钮始终可点。
+   - 当前实现里 manualEnabled/autoEnabled 对 EmergencyStop 也返回 true，因此手动/自动业务按钮本身也会被启用；但多数槽函数内部仍检查 currentMode。
+
+2. Manual 状态：
+   - 前、后、左、右、停止、升降可用。
+   - 自动准备、单点导航、抓取不可用。
+   - 从急停切到手动后，1 秒后远程执行 `start_robot_driver.sh`。
+
+3. Auto 状态：
+   - 自动准备、单点导航、抓取可用。
+   - 手动方向控制不可用。
+   - 单点导航和抓取要求 `isAutoPrepared == true`。
+
+4. EmergencyStop 触发：
+   - changeMode(EmergencyStop)
+   - 远程执行 `stop_all_terminals.sh`
+   - 用于停止相关 ROS2 launch、摄像头 SSH、导航/抓取等进程。
+
+
+六、按钮到槽函数到脚本调用图
+----------------------------
+
+topBar：
+
+publishButton
+`-- on_publishButton_clicked()
+    |-- 未连接：
+    |   |-- startTunnel()
+    |   |   |-- 如 8080/8081/9090 已监听，则复用现有隧道
+    |   |   `-- 否则启动：
+    |   |       sshpass -p 'shihe321' ssh -N -p 2345
+    |   |       -L 8080:127.0.0.1:8080
+    |   |       -L 8081:127.0.0.1:8081
+    |   |       -L 9090:127.0.0.1:9090
+    |   |       rpp@localhost
+    |   |-- probeLocalPort(8080/8081/9090)
+    |   `-- 按钮文本改为“断开”
+    |
+    `-- 已连接：
+        |-- mapView/videoView 置为 about:blank
+        |-- stopTunnel()
+        |-- mapStarted/videoStarted = false
+        `-- 按钮文本恢复
+
+showMapButton
+`-- on_showMapButton_clicked()
+    |-- 要求 tunnelConnected == true
+    |-- 未启动地图：
+    |   |-- runAutoCommand(buildRobotSshCommand("./start_map_service.sh"))
+    |   |-- ensureMapView()
+    |   |-- probeUrl("http://127.0.0.1:8080/robot_map_local.html")
+    |   `-- mapView->load("http://127.0.0.1:8080/robot_map_local.html")
+    |
+    `-- 已启动地图：
+        |-- mapView about:blank
+        |-- runAutoCommand(buildRobotSshCommand("./stop_map_runtime.sh"))
+        `-- mapStarted = false
+
+showVideoButton
+`-- on_showVideoButton_clicked()
+    |-- 要求 tunnelConnected == true
+    |-- 未启动视频：
+    |   |-- runAutoCommand(buildRobotSshCommand("./start_video_service.sh"))
+    |   |-- ensureVideoView()
+    |   |-- probeUrl("http://127.0.0.1:8080/video.html")
+    |   `-- videoView->load("http://127.0.0.1:8080/video.html")
+    |
+    `-- 已启动视频：
+        |-- videoView about:blank
+        |-- runAutoCommand(buildRobotSshCommand("./stop_video_service.sh"))
+        `-- videoStarted = false
+
+emergencyStopButton
+`-- on_emergencyStopButton_clicked()
+    |-- changeMode(EmergencyStop)
+    |-- logView 追加“急停！”
+    `-- runManualCommand("sshpass ... ./stop_all_terminals.sh")
+
+
+手动控制：
+
+manualControlButton
+`-- on_manualControlButton_clicked()
+    `-- changeMode(Manual)
+        `-- 1 秒后 runAutoCommand("sshpass ... ./start_robot_driver.sh")
+
+forwardButton pressed
+`-- on_forwardButton_pressed()
+    `-- runManualCommand("sshpass ... ./forward.sh")
+        `-- ROS2: ros2 topic pub -r 10 /cmd_vel geometry_msgs/Twist
+            `-- linear.x = 0.3, angular.z = 0.0
+
+forwardButton released
+`-- on_forwardButton_released()
+    `-- runManualCommand("sshpass ... ./stop.sh")
+        `-- ROS2: /cmd_vel 零速度
+
+backwardButton pressed
+`-- on_backwardButton_pressed()
+    `-- runManualCommand("sshpass ... ./backward.sh")
+        `-- ROS2: /cmd_vel linear.x = -0.3
+
+backwardButton released
+`-- on_backwardButton_released()
+    `-- runManualCommand("sshpass ... ./stop.sh")
+
+leftButton pressed
+`-- on_leftButton_pressed()
+    `-- runManualCommand("sshpass ... ./turn_left.sh")
+        `-- ROS2: /cmd_vel angular.z = 0.8
+
+leftButton released
+`-- on_leftButton_released()
+    `-- runManualCommand("sshpass ... ./stop.sh")
+
+rightButton pressed
+`-- on_rightButton_pressed()
+    `-- runManualCommand("sshpass ... ./turn_right.sh")
+        `-- ROS2: /cmd_vel angular.z = -0.8
+
+rightButton released
+`-- on_rightButton_released()
+    `-- runManualCommand("sshpass ... ./stop.sh")
+
+stopButton
+`-- on_stopButton_clicked()
+    `-- runManualCommand("sshpass ... ./stop.sh")
+
+liftButton
+`-- on_liftButton_clicked()
+    |-- 读取 liftParamEdit
+    |-- 转 double
+    |-- 检查范围 0.0 到 0.3 米
+    `-- runManualCommand("sshpass ... ./up_down.sh <height>")
+        |-- ros2 launch motor_lift_ros motor_lift_ros.launch.py &
+        `-- ros2 topic pub /motor_lift/set_position std_msgs/msg/Float32
+
+
+自动控制：
+
+autoControlButton
+`-- on_autoControlButton_clicked()
+    `-- changeMode(Auto)
+
+autoPrepareButton
+`-- on_autoPrepareButton_clicked()
+    |-- 要求 currentMode == Auto
+    |-- isAutoPrepared = true
+    `-- runAutoCommand("sshpass ... ./start_all.sh")
+        |-- ros2 launch robot_bringup robot_driver.launch.py
+        |-- ros2 launch robot_bringup arm.launch.py
+        |-- ssh 到 192.168.11.10 启动 realsense2_camera
+        |-- ssh 到 192.168.11.10 启动 yolo_bringup
+        |-- ros2 launch bt_task_manager_ros2 grasp_node.launch.py
+        `-- ros2 launch navigation_2d fast_lio_navigation.launch.py use_rviz:=false
+
+singlePointNavButton
+`-- on_singlePointNavButton_clicked()
+    |-- 要求 currentMode == Auto
+    |-- 要求 isAutoPrepared == true
+    |-- 读取 xInput/yInput/wInput
+    |-- 检查 W 范围 0 到 360
+    |-- 拼接 "./navigate_to_pose.sh <x> <y> <w>"
+    |-- runManualCommand(cmd)
+    `-- runAutoCommand(cmd)
+        `-- navigate_to_pose.sh:
+            |-- 仅支持 yaw: 0 / 90 / 180 / 270
+            |-- 转换为四元数 z/w
+            `-- ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose
+
+grabButton
+`-- on_grabButton_clicked()
+    |-- 要求 currentMode == Auto
+    |-- 要求 isAutoPrepared == true
+    `-- runAutoCommand("sshpass ... ./loop_scraping.sh")
+        `-- ros2 topic pub /grasp_node/cmd std_msgs/msg/String "data: 'loop'" -1
+
+
+七、地图显示链路
+----------------
+
+Qt GUI
+|
+| 点击“连接”
+v
+startTunnel()
+|
+| 建立 SSH 本地端口转发
+| 服务器 127.0.0.1:8080 -> 机器人 127.0.0.1:8080
+| 服务器 127.0.0.1:9090 -> 机器人 127.0.0.1:9090
+v
+点击“启动地图”
+|
+v
+runAutoCommand(buildRobotSshCommand("./start_map_service.sh"))
+|
+v
+机器人侧 start_map_service.sh
+|
+|-- source /opt/ros/humble/setup.bash
+|-- 启动 rosbridge_server：
+|   `-- ros2 launch rosbridge_server rosbridge_websocket_launch.xml
+|
+`-- 启动 HTTP 静态服务：
+    `-- cd /home/rpp/rpp_tools/html
+    `-- python3 -m http.server 8080
+|
+v
+Qt mapView 加载：
+http://127.0.0.1:8080/robot_map_local.html
+|
+v
+robot_map_local.html
+|
+|-- 引入 roslib.min.js
+|-- WebSocket 连接 ws://127.0.0.1:9090
+|-- 在 canvas 上绘制地图、机器人、路径、目标点等
+|-- 典型 ROS 数据：
+|   |-- /map 或 /web_map
+|   |-- /plan
+|   |-- /local_plan
+|   |-- /goal_pose
+|   |-- robot pose / velocity 等
+|
+v
+Qt GUI 内嵌显示地图
+
+补充：
+
+map_bridge.py 的作用是桥接地图：
+
+/map
+`-- MapBridge 订阅 nav_msgs/msg/OccupancyGrid
+    |-- 保存 latest_map
+    |-- 立即发布到 /web_map
+    `-- 每 1 秒重复发布 latest_map
+
+这样做的目的通常是让 Web 端更稳定地收到地图数据。
+
+
+八、视频显示链路
+----------------
+
+Qt GUI
+|
+| 点击“连接”
+v
+startTunnel()
+|
+| 建立 SSH 本地端口转发
+| 服务器 127.0.0.1:8080 -> 机器人 127.0.0.1:8080
+| 服务器 127.0.0.1:8081 -> 机器人 127.0.0.1:8081
+v
+点击“启动视频”
+|
+v
+runAutoCommand(buildRobotSshCommand("./start_video_service.sh"))
+|
+v
+机器人侧 start_video_service.sh
+|
+|-- source /opt/ros/humble/setup.bash
+|-- 检查 8081 是否已监听
+`-- nohup python3 /home/rpp/rpp_tools/video_mjpeg_server.py
+|
+v
+video_mjpeg_server.py
+|
+|-- Flask HTTP 服务监听 127.0.0.1:8081
+|-- ROS2 线程 rclpy.spin()
+|-- 订阅前置相机：
+|   `-- /camera/front_camera/color/image_raw/compressed
+|       `-- sensor_msgs/msg/CompressedImage
+|
+|-- 订阅 YOLO 调试图：
+|   `-- /yolo/dbg_image
+|       `-- sensor_msgs/msg/Image
+|       `-- numpy + PIL 转 JPEG
+|
+|-- HTTP 接口：
+|   |-- /front_snapshot.jpg
+|   |-- /yolo_snapshot.jpg
+|   `-- /stats
+|
+v
+Qt videoView 加载：
+http://127.0.0.1:8080/video.html
+|
+v
+video.html
+|
+|-- 周期刷新图片
+|-- FRONT_URL = http://127.0.0.1:8081/front_snapshot.jpg
+|-- YOLO_URL  = http://127.0.0.1:8081/yolo_snapshot.jpg
+|
+v
+Qt GUI 内嵌显示双路视频
+
+
+九、远程通信与端口关系图
+------------------------
+
+Server / 上位机本地：
+
+127.0.0.1:2345
+`-- SSH 入口，代码中作为 rpp@localhost 的连接端口使用
+
+127.0.0.1:8080
+`-- 经 SSH -L 转发到机器人侧 8080
+    `-- Python http.server 静态页面服务
+        |-- robot_map_local.html
+        `-- video.html
+
+127.0.0.1:8081
+`-- 经 SSH -L 转发到机器人侧 8081
+    `-- Flask 视频快照服务
+        |-- /front_snapshot.jpg
+        |-- /yolo_snapshot.jpg
+        `-- /stats
+
+127.0.0.1:9090
+`-- 经 SSH -L 转发到机器人侧 9090
+    `-- rosbridge_server WebSocket
+        `-- ws://127.0.0.1:9090
+
+
+十、机器人侧 rpp_tools 脚本职责图
+---------------------------------
+
+rpp_tools/
+|
+|-- 手动运动控制
+|   |-- forward.sh
+|   |   `-- ros2 topic pub -r 10 /cmd_vel geometry_msgs/Twist
+|   |       `-- linear.x = 0.3
+|   |
+|   |-- backward.sh
+|   |   `-- /cmd_vel linear.x = -0.3
+|   |
+|   |-- turn_left.sh
+|   |   `-- /cmd_vel angular.z = 0.8
+|   |
+|   |-- turn_right.sh
+|   |   `-- /cmd_vel angular.z = -0.8
+|   |
+|   `-- stop.sh
+|       `-- /cmd_vel linear.x = 0.0, angular.z = 0.0，一次发布
+|
+|-- 升降控制
+|   `-- up_down.sh <height>
+|       |-- ros2 launch motor_lift_ros motor_lift_ros.launch.py &
+|       `-- ros2 topic pub /motor_lift/set_position std_msgs/msg/Float32
+|
+|-- 自动准备
+|   |-- start_robot_driver.sh
+|   |   `-- ros2 launch robot_bringup robot_driver.launch.py
+|   |
+|   `-- start_all.sh
+|       |-- robot_driver.launch.py
+|       |-- arm.launch.py
+|       |-- 远程 Realsense 相机：192.168.11.10
+|       |-- 远程 YOLO：192.168.11.10
+|       |-- grasp_node.launch.py
+|       `-- fast_lio_navigation.launch.py
+|
+|-- 自动任务
+|   |-- navigate_to_pose.sh <x> <y> <yaw>
+|   |   `-- ros2 action send_goal /navigate_to_pose
+|   |
+|   `-- loop_scraping.sh
+|       `-- ros2 topic pub /grasp_node/cmd "loop"
+|
+|-- 地图服务
+|   |-- start_map_service.sh
+|   |   |-- rosbridge_server on 9090
+|   |   `-- python3 -m http.server 8080
+|   |
+|   |-- stop_map_runtime.sh
+|   |   `-- 停止 rosbridge，不停止 8080 静态 HTTP
+|   |
+|   |-- stop_map_service.sh
+|   |   |-- 停止 8080 静态 HTTP
+|   |   `-- 停止 rosbridge
+|   |
+|   `-- map_bridge.py
+|       `-- /map -> /web_map
+|
+|-- 视频服务
+|   |-- start_video_service.sh
+|   |   `-- python3 video_mjpeg_server.py on 8081
+|   |
+|   |-- stop_video_service.sh
+|   |   `-- pkill video_mjpeg_server.py
+|   |
+|   |-- video_mjpeg_server.py
+|   |   |-- ROS2 image subscriptions
+|   |   `-- Flask snapshot HTTP API
+|   |
+|   `-- video_mjpeg_server0.py
+|       `-- 视频服务旧/备用版本
+|
+|-- html/
+|   |-- robot_map_local.html
+|   |   `-- 地图 canvas 页面，连接 rosbridge
+|   |
+|   |-- video.html
+|   |   `-- 双路视频页面，轮询 8081 快照
+|   |
+|   |-- roslib.min.js
+|   |   `-- 浏览器连接 rosbridge 的 JS 库
+|   |
+|   |-- test_connect.html
+|   |   `-- rosbridge 连接测试页
+|   |
+|   |-- map.png / map_meta.json
+|   |   `-- 静态地图资源/元数据
+|   |
+|   `-- *1.html
+|       `-- 旧版或备用页面
+|
+`-- zhiling.txt
+    `-- 常用命令记录/调试笔记
+
+
+十一、关键类和函数职责表
+------------------------
+
+MainWindow::MainWindow()
+`-- 初始化 UI、样式、按钮布局、默认状态、可伸缩布局。
+
+MainWindow::~MainWindow()
+`-- 停止 SSH 隧道，释放 UI。
+
+runManualCommand(cmd)
+`-- 手动模式命令执行器：
+    |-- 当前 process 仍运行时先 kill
+    |-- 新建 QProcess
+    |-- stdout/stderr 追加到 logView
+    `-- bash -c 执行命令
+
+runAutoCommand(cmd)
+`-- 自动模式命令执行器：
+    |-- 每次创建新的 QProcess
+    |-- 可同时运行多个自动任务
+    |-- finished 后从 autoProcesses 移除并 deleteLater
+    `-- stdout/stderr 追加到 logView
+
+changeMode(newMode)
+`-- 控制模式切换：
+    |-- EmergencyStop 可切到 Manual/Auto
+    |-- 非急停状态可切换模式
+    |-- 切到 Manual 后启动 robot driver
+    `-- 调用 updateControlButtons()
+
+updateControlButtons()
+`-- 根据 currentMode 控制按钮 enabled 状态。
+
+buildRobotSshCommand(remoteCmd)
+`-- 构造：
+    sshpass -p '<password>' ssh -o StrictHostKeyChecking=no -p <port> rpp@localhost
+    "bash -lc 'cd ~/rpp_tools && <remoteCmd>'"
+
+buildControlSshCommand(remoteCmd)
+`-- 构造带 -t 的控制 SSH 命令，目前大量槽函数仍直接手写 sshpass 命令。
+
+startTunnel()
+`-- 建立 8080/8081/9090 的 SSH 本地转发。
+
+stopTunnel()
+`-- kill tunnelProcess，并 pkill 匹配的 ssh -L 命令。
+
+ensureMapView()
+`-- 延迟创建 mapContainer 内的 QWebEngineView。
+
+ensureVideoView()
+`-- 延迟创建 videoContainer 内的 QWebEngineView。
+
+probeLocalPort(port)
+`-- 使用 `ss -ltn | grep` 检查本地端口是否监听。
+
+probeUrl(url)
+`-- 使用 curl -I 检查页面是否可访问。
+
+setupResizableLayout()
+`-- 将 .ui 中固定几何布局改造成 QSplitter 动态布局。
+
+resizeEvent()
+`-- 调用 updateSplitterGeometry()，但当前主要布局已经由 rootLayout/QSplitter 管理。
+
+
+十二、主要数据流
+----------------
+
+1. 手动运动控制数据流：
+
+用户按住方向按钮
+-> Qt pressed 槽函数
+-> runManualCommand()
+-> sshpass ssh rpp@localhost -p 2345
+-> 机器人侧 ~/rpp_tools/forward.sh 等脚本
+-> ros2 topic pub -r 10 /cmd_vel
+-> 底盘控制节点接收速度
+-> 用户松开按钮
+-> stop.sh
+-> /cmd_vel 零速度
+
+2. 升降控制数据流：
+
+用户输入高度
+-> liftParamEdit
+-> Qt 校验 0.0 到 0.3
+-> up_down.sh <height>
+-> motor_lift_ros.launch.py
+-> /motor_lift/set_position Float32
+-> 升降电机执行
+
+3. 自动准备数据流：
+
+用户切到自动控制
+-> 点击自动准备
+-> start_all.sh
+-> 启动底盘、机械臂、相机、YOLO、抓取节点、导航节点
+-> isAutoPrepared = true
+
+4. 单点导航数据流：
+
+用户输入 X/Y/W
+-> Qt 校验
+-> navigate_to_pose.sh
+-> yaw 转 quaternion
+-> ros2 action send_goal /navigate_to_pose
+-> Nav2 执行导航
+
+5. 抓取数据流：
+
+用户点击抓取
+-> loop_scraping.sh
+-> /grasp_node/cmd 发布 "loop"
+-> 抓取任务节点执行循环抓取
+
+6. 地图数据流：
+
+ROS2 /map
+-> map_bridge.py 可转发到 /web_map
+-> rosbridge_server on 9090
+-> robot_map_local.html 使用 roslib.js 订阅
+-> canvas 绘制地图/路径/机器人/目标点
+-> Qt WebEngine 显示
+
+7. 视频数据流：
+
+ROS2 压缩相机图像 /camera/front_camera/color/image_raw/compressed
+ROS2 YOLO 调试图 /yolo/dbg_image
+-> video_mjpeg_server.py
+-> Flask 快照接口 8081
+-> video.html 周期刷新 jpg
+-> Qt WebEngine 显示
+
+
+十三、构建与运行关系
+--------------------
+
+开发/构建：
+
+ros2_pub_gui.pro
+|
+`-- qmake
+    |
+    |-- moc 处理 mainwindow.h 的 Q_OBJECT
+    |   `-- moc_mainwindow.cpp
+    |
+    |-- uic 处理 mainwindow.ui
+    |   `-- ui_mainwindow.h
+    |
+    |-- rcc/translation 处理资源和翻译
+    |   `-- qrc_qmake_qmake_qm_files.cpp
+    |
+    `-- g++ 链接 Qt5 Core/Gui/Widgets/WebEngineWidgets
+        `-- ros2_pub_gui 可执行程序
+
+运行：
+
+./ros2_pub_gui
+|
+|-- main.cpp 创建 QApplication
+|-- 尝试加载 :/i18n/ros2_pub_gui_<locale>
+|-- MainWindow w
+|-- w.show()
+`-- a.exec()
+
+
+十四、结构性注意点
+------------------
+
+1. 当前工作目录不是 Git 仓库，无法通过 git status 跟踪改动。
+
+2. `trajectory.txt` 原来为空，本分析直接写入该文件。
+
+3. 仓库中混有源码、Debug 构建产物、Release 发布产物和 AppImage 依赖库；如果后续整理项目，建议把构建产物和发布包移出源码目录或加入 `.gitignore`。
+
+4. `ros2_pub_gui/` 和 `ros2_pub_gui_github/` 各有一份源码，当前 Qt 工程主要看 `ros2_pub_gui/`；`ros2_pub_gui_github/` 还包含完整 `rpp_tools`，更像发布/同步到 GitHub 的目录。
+
+5. `mainwindow.cpp` 中 SSH 命令有两种写法：
+   - 已封装的 `buildRobotSshCommand()` / `buildControlSshCommand()`
+   - 多处手写 `sshpass -p 'shihe321' ssh -t -p 2345 ...`
+   后续建议统一走封装函数，减少端口、用户名、密码修改时的遗漏。
+
+6. 源码中硬编码了机器人密码 `shihe321`。如果项目要发布或多人协作，建议改为配置文件、环境变量或免密 SSH。
+
+7. `on_singlePointNavButton_clicked()` 中同一个导航命令先 `runManualCommand(cmd)`，后面又 `runAutoCommand(cmd)`，可能导致单点导航被执行两次。结构上更合理的是只走一个执行通道。
+
+8. `navigate_to_pose.sh` 只支持 0/90/180/270 四个角度，但 Qt 侧只检查 W 在 0 到 360，没有限制为这四个值。用户输入例如 45 会通过 Qt 校验，但脚本会报错。
+
+9. `stop_map_runtime.sh` 只停止 rosbridge，不停止 8080 静态 HTTP；`stop_map_service.sh` 才会同时停止 HTTP 和 rosbridge。Qt 的停止地图按钮当前调用的是 `stop_map_runtime.sh`。
+
+10. `updateSplitterGeometry()` 仍引用 `mainSplitter`，但当前布局实际使用 `outerSplitter/contentSplitter/leftSplitter`。因为 `mainSplitter` 默认是 nullptr，该函数多数情况下直接返回，实际尺寸主要由 QSplitter 和 layout 管理。
+
+11. 手动控制的 pressed 脚本使用 `ros2 topic pub -r 10` 持续发布，released 时通过 `runManualCommand(stop.sh)` 会先 kill 上一个进程，再发布停止命令，这个设计符合按住运动、松开停止的控制模型。
+
+12. 地图和视频页面依赖 SSH 隧道已建立，否则 Qt WebEngine 加载的是服务器本地地址，会访问不到机器人侧服务。
+
+
+十五、简化总览图
+----------------
+
++--------------------+
+| Qt GUI             |
+| ros2_pub_gui       |
++---------+----------+
+          |
+          | QProcess
+          v
++--------------------+
+| sshpass / ssh      |
+| localhost:2345     |
++---------+----------+
+          |
+          v
++--------------------+
+| Robot rpp_tools    |
++---------+----------+
+          |
+          +-------------------------+
+          |                         |
+          v                         v
++--------------------+      +--------------------+
+| ROS2 控制命令       |      | Web 服务            |
+| /cmd_vel           |      | 8080 static html    |
+| /navigate_to_pose  |      | 8081 Flask image    |
+| /grasp_node/cmd    |      | 9090 rosbridge      |
+| /motor_lift/...    |      +---------+----------+
++--------------------+                |
+                                      v
+                             +--------------------+
+                             | QWebEngineView     |
+                             | mapView/videoView  |
+                             +--------------------+
