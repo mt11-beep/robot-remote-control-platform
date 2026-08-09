@@ -23,7 +23,7 @@
 
 ## 项目框架
 
-具体请看(docs/trajectory.txt)
+具体请看(docs/architecture.txt)
 
 ## 项目目录结构
 
