@@ -34,6 +34,10 @@
 ├── mainwindow.cpp
 ├── mainwindow.ui
 ├── ros2_pub_gui.pro
+└── docs
+    ├── gui0.png
+    ├── gui1.png
+    ├── trajectory.txt
 └── rpp_tools
     ├── forward.sh / backward.sh / turn_left.sh / turn_right.sh / stop.sh
     ├── up_down.sh
